@@ -1,9 +1,9 @@
-const { put, list } = require('@vercel/blob');
+import { put, list } from '@vercel/blob';
 
 const BLOB_NAME = 'onboarding-data.json';
 const META_NAME = 'onboarding-meta.json';
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -66,20 +66,4 @@ module.exports = async function handler(req, res) {
     console.error('API error:', err);
     return res.status(500).json({ error: err.message });
   }
-};      const putResult = await blobPut(BLOB_NAME, JSON.stringify(data));
-
-      const now = new Date().toISOString();
-      await blobPut(META_NAME, JSON.stringify({
-        updatedAt: now,
-        updatedBy: updatedBy || 'Unknown'
-      }));
-
-      return res.status(200).json({ success: true, updatedAt: now, debug: putResult });
-    }
-
-    return res.status(405).json({ error: 'Method not allowed' });
-  } catch (err) {
-    console.error('API error:', err);
-    return res.status(500).json({ error: err.message });
-  }
-};
+}
