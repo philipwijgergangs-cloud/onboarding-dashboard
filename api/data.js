@@ -3,20 +3,24 @@ const META_NAME = 'onboarding-meta.json';
 
 async function blobList(prefix) {
   const token = process.env.BLOB_READ_WRITE_TOKEN;
+  if (!token) throw new Error('BLOB_READ_WRITE_TOKEN not set');
   const res = await fetch('https://blob.vercel-storage.com?' + new URLSearchParams({ prefix }), {
     headers: { Authorization: 'Bearer ' + token }
   });
+  if (!res.ok) throw new Error('Blob list failed: ' + res.status + ' ' + await res.text());
   const json = await res.json();
   return json.blobs || [];
 }
 
 async function blobGet(url) {
   const res = await fetch(url);
+  if (!res.ok) throw new Error('Blob get failed: ' + res.status);
   return res.json();
 }
 
 async function blobPut(pathname, body) {
   const token = process.env.BLOB_READ_WRITE_TOKEN;
+  if (!token) throw new Error('BLOB_READ_WRITE_TOKEN not set');
   const res = await fetch('https://blob.vercel-storage.com/' + pathname, {
     method: 'PUT',
     headers: {
@@ -27,6 +31,10 @@ async function blobPut(pathname, body) {
     },
     body: body
   });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error('Blob put failed: ' + res.status + ' ' + errText);
+  }
   return res.json();
 }
 
@@ -64,7 +72,7 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ error: 'Data must be an array.' });
       }
 
-      await blobPut(BLOB_NAME, JSON.stringify(data));
+      const putResult = await blobPut(BLOB_NAME, JSON.stringify(data));
 
       const now = new Date().toISOString();
       await blobPut(META_NAME, JSON.stringify({
@@ -72,12 +80,12 @@ module.exports = async function handler(req, res) {
         updatedBy: updatedBy || 'Unknown'
       }));
 
-      return res.status(200).json({ success: true, updatedAt: now });
+      return res.status(200).json({ success: true, updatedAt: now, debug: putResult });
     }
 
     return res.status(405).json({ error: 'Method not allowed' });
   } catch (err) {
     console.error('API error:', err);
-    return res.status(500).json({ error: 'Server error: ' + err.message });
+    return res.status(500).json({ error: err.message });
   }
 };
