@@ -306,6 +306,504 @@ function setSyncState(state,text){
 async function loadData(){
   setSyncState('loading','Loading…');
   try{
+    const res=await fetch(API_URL+'?t='+Date.now());
+    if(!res.ok)throw new Error(res.status);
+    const json=await res.json();isOnline=true;
+    if(json.data&&Array.isArray(json.data)&&json.data.length>0){
+      CLIENT_DATA=json.data;
+      const when=json.updatedAt?new Date(json.updatedAt).toLocaleString():'';
+      setSyncState('ok','Synced · '+when);
+      localStorage.setItem(STORAGE_KEY,JSON.stringify(CLIENT_DATA));
+    }else{
+      // Server is empty. Check if we have local data to push up first.
+      const cached=localStorage.getItem(STORAGE_KEY);
+      if(cached){
+        const localData=JSON.parse(cached);
+        if(Array.isArray(localData)&&localData.length>0){
+          CLIENT_DATA=localData;
+          await saveData('System (local sync)');
+          setSyncState('ok','Local data synced to server');
+        }else{
+          CLIENT_DATA=[];
+          setSyncState('ok','No data yet. Add engagements in the Manage tab.');
+        }
+      }else{
+        CLIENT_DATA=[];
+        setSyncState('ok','No data yet. Add engagements in the Manage tab.');
+      }
+    }
+  }catch(err){
+    console.warn('API unavailable, using local cache.',err);isOnline=false;
+    try{const c=localStorage.getItem(STORAGE_KEY);if(c){CLIENT_DATA=JSON.parse(c);setSyncState('error','Could not connect. Showing last known data.');}
+    else{CLIENT_DATA=[];setSyncState('error','Could not connect. No local data found.');}}
+    catch(e2){CLIENT_DATA=[];setSyncState('error','Could not connect.');}
+  }
+  render();
+}
+
+async function saveData(overrideName){
+  const name=overrideName||'Team';
+  localStorage.setItem(STORAGE_KEY,JSON.stringify(CLIENT_DATA));
+  if(!isOnline){setSyncState('error','Could not reach server. Your changes are saved in this browser only.');return;}
+  setSyncState('saving','Saving…');
+  try{
+    const res=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:CLIENT_DATA,updatedBy:name})});
+    if(!res.ok)throw new Error(res.status);
+    const json=await res.json();
+    setSyncState('ok','Saved · '+new Date(json.updatedAt).toLocaleString());
+  }catch(err){console.warn('Save failed.',err);setSyncState('error','Save failed. Try refreshing the page.');}
+}
+
+async function refreshData(){await loadData();showToast('Data refreshed.')}
+
+
+function exportJSON(){const b=new Blob([JSON.stringify(CLIENT_DATA,null,2)],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='onboarding-'+new Date().toISOString().slice(0,10)+'.json';a.click();URL.revokeObjectURL(u);showToast('Exported.')}
+async function importJSON(ev){const f=ev.target.files[0];if(!f)return;const r=new FileReader();r.onload=async function(e){try{const d=JSON.parse(e.target.result);if(!Array.isArray(d))throw new Error('Expected array.');if(confirm('Replace all shared data? This affects everyone.')){CLIENT_DATA=d;await saveData();clearForm();render();showToast('Imported '+d.length+' clients.')}}catch(err){showToast('Import failed: '+err.message)}ev.target.value=''};r.readAsText(f)}
+
+let currentView='gantt',currentPeriod='monthly';
+function pd(s){return new Date(s+'T00:00:00')}
+function aw(d,w){const r=new Date(d);r.setDate(r.getDate()+w*7);return r}
+function wb(a,b){return Math.round((b-a)/(7*864e5))}
+function fd(d){const m=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];return m[d.getMonth()]+' '+d.getDate()+', '+d.getFullYear()}
+function ed(e){return e.durationWeeks?aw(pd(e.startDate),e.durationWeeks):pd(e.startDate)}
+function isLicense(e){return e.launchType==='Full License'}
+function autoStatus(e){
+  const now=new Date(),s=pd(e.startDate);
+  if(isLicense(e)) return now<s?'Upcoming':'Launched';
+  const end=ed(e);
+  if(now<s)return'Upcoming';if(now>=s&&now<end)return'In Progress';return'Completed';
+}
+function progress(e){if(isLicense(e))return 0;const st=autoStatus(e);if(st==='Completed')return 100;if(st==='Upcoming')return 0;const s=pd(e.startDate),end=ed(e),now=new Date();return Math.round(((now-s)/(end-s))*100)}
+function tc(t){return t==='Full License'?'license':'poc'}
+function sc(s){return s==='In Progress'?'status-inprogress':s==='Completed'||s==='Launched'?'status-completed':'status-upcoming'}
+function mn(e){return e.markets.map(m=>typeof m==='string'?m:m.name)}
+function gb(e,n){const m=e.markets.find(mk=>(typeof mk==='string'?mk:mk.name)===n);return(!m||typeof m==='string')?[]:(m.brands||[])}
+function allE(){const o=[];CLIENT_DATA.forEach((c,ci)=>c.engagements.forEach((e,ei)=>o.push({...e,cn:c.name,ci,ei})));return o}
+function filtE(){const t=document.getElementById('filterType').value,s=document.getElementById('filterStatus').value,q=document.getElementById('filterMarket').value.toLowerCase().trim();
+  return allE().filter(e=>{if(t&&e.launchType!==t)return false;const st=autoStatus(e);if(s&&st!==s)return false;if(q){const inM=mn(e).some(m=>m.toLowerCase().includes(q));const inB=e.markets.some(m=>(m.brands||[]).some(b=>b.toLowerCase().includes(q)));const inN=e.cn.toLowerCase().includes(q)||e.label.toLowerCase().includes(q);if(!inM&&!inB&&!inN)return false}return true})}
+function grouped(){const es=filtE();const m=new Map();es.forEach(e=>{if(!m.has(e.cn))m.set(e.cn,[]);m.get(e.cn).push(e)});return m}
+function resetFilters(){document.getElementById('filterType').value='';document.getElementById('filterStatus').value='';document.getElementById('filterMarket').value='';render()}
+['filterType','filterStatus'].forEach(id=>document.getElementById(id).addEventListener('change',render));
+document.getElementById('filterMarket').addEventListener('input',render);
+function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('visible');setTimeout(()=>t.classList.remove('visible'),3000)}
+const esc=s=>s.replace(/'/g,"\\'").replace(/"/g,'&quot;');
+
+// SUMMARY
+function renderSum(){
+  const a=allE(),pocs=a.filter(e=>!isLicense(e)),lics=a.filter(e=>isLicense(e));
+  const activePoc=pocs.filter(e=>autoStatus(e)==='In Progress').length;
+  const upPoc=pocs.filter(e=>autoStatus(e)==='Upcoming').length;
+  const donePoc=pocs.filter(e=>autoStatus(e)==='Completed').length;
+  const upLic=lics.filter(e=>autoStatus(e)==='Upcoming').length;
+  const launched=lics.filter(e=>autoStatus(e)==='Launched').length;
+  document.getElementById('summaryStrip').innerHTML=`
+    <div class="summary-card"><span class="label">Clients</span><span class="value">${CLIENT_DATA.length}</span><span class="sub">${a.length} engagements</span></div>
+    <div class="summary-card accent-amber"><span class="label">Active POCs</span><span class="value">${activePoc}</span><span class="sub">${upPoc} upcoming</span></div>
+    <div class="summary-card accent-green"><span class="label">POCs Done</span><span class="value">${donePoc}</span><span class="sub">of ${pocs.length}</span></div>
+    <div class="summary-card accent-blue"><span class="label">License Launches</span><span class="value">${launched}</span><span class="sub">${upLic} upcoming</span></div>`;
+}
+
+// TOOLTIP
+const ttEl=document.getElementById('marketTooltip');let ttT;
+function showMTT(ev,cn,el,m){clearTimeout(ttT);const c=CLIENT_DATA.find(c=>c.name===cn);if(!c)return;const eng=c.engagements.find(e=>e.label===el);if(!eng)return;const br=gb(eng,m);
+  ttEl.innerHTML=`<div class="tt-header">${cn} · ${el}</div><div class="tt-market">${m}</div><div class="tt-label">Activated Brands</div>${br.length?`<div class="tt-brands">${br.map(b=>`<span class="tt-brand-tag">${b}</span>`).join('')}</div>`:'<div class="tt-none">No brands specified yet</div>'}`;
+  ttEl.style.display='block';posTT(ev)}
+function posTT(ev){const r=ttEl.getBoundingClientRect();let x=ev.clientX+14,y=ev.clientY+14;if(x+r.width+10>window.innerWidth)x=ev.clientX-r.width-10;if(y+r.height+10>window.innerHeight)y=ev.clientY-r.height-10;ttEl.style.left=x+'px';ttEl.style.top=y+'px'}
+function hideMTT(){ttT=setTimeout(()=>{ttEl.style.display='none'},100)}
+
+// PANEL
+function showPanel(cn,el){
+  const c=CLIENT_DATA.find(c=>c.name===cn);if(!c)return;const eng=c.engagements.find(e=>e.label===el);if(!eng)return;
+  const p=document.getElementById('detailPanel'),o=document.getElementById('tooltipOverlay');
+  const end=ed(eng),st=autoStatus(eng),prog=progress(eng);
+  let mh='';
+  if(eng.markets.some(m=>typeof m==='object')){mh='<div class="panel-market-section"><div class="pms-title">Markets &amp; Brands</div>';
+    eng.markets.forEach(m=>{const n=typeof m==='string'?m:m.name;const br=typeof m==='string'?[]:(m.brands||[]);
+    mh+=`<div class="panel-market-item"><div class="pmi-name">${n}</div>${br.length?`<div class="pmi-brands">${br.map(b=>`<span class="brand-tag">${b}</span>`).join('')}</div>`:'<div style="font-size:.75rem;color:var(--gray-400);font-style:italic;">No brands specified</div>'}</div>`});mh+='</div>'}
+  const timeline=isLicense(eng)?`<div class="panel-row"><span class="panel-label">Launch</span><span class="panel-value">${fd(pd(eng.startDate))}</span></div>`:`<div class="panel-row"><span class="panel-label">Start</span><span class="panel-value">${fd(pd(eng.startDate))}</span></div><div class="panel-row"><span class="panel-label">End (est.)</span><span class="panel-value">${fd(end)}</span></div><div class="panel-row"><span class="panel-label">Duration</span><span class="panel-value">${eng.durationWeeks} weeks</span></div><div class="panel-row"><span class="panel-label">Progress</span><span class="panel-value">${prog}%</span></div>`;
+  p.innerHTML=`<button class="panel-close" onclick="closePanel()">&times;</button><h3>${cn}</h3><div style="font-size:.92rem;font-weight:600;color:var(--gray-700);margin-bottom:12px;">${eng.label}</div>
+    <div style="display:flex;gap:6px;margin-bottom:16px;"><span class="badge ${tc(eng.launchType)}">${eng.launchType}</span><span class="badge ${sc(st)}">${st}</span></div>
+    <div class="panel-row"><span class="panel-label">Markets</span><div style="display:flex;flex-wrap:wrap;gap:4px;">${mn(eng).map(m=>`<span class="market-tag">${m}</span>`).join('')}</div></div>
+    ${timeline}
+    ${eng.contact?`<div class="panel-row"><span class="panel-label">Contact</span><span class="panel-value">${eng.contact}</span></div>`:''}
+    ${eng.notes?`<div class="panel-notes">${eng.notes}</div>`:''}${mh}
+    ${!isLicense(eng)?`<div class="card-progress-bar" style="margin-top:16px;"><div class="fill poc" style="width:${prog}%"></div></div>`:''}`;
+  p.style.display='block';o.classList.add('visible')}
+function closePanel(){document.getElementById('detailPanel').style.display='none';document.getElementById('tooltipOverlay').classList.remove('visible')}
+
+// GANTT
+function renderGantt(){
+  const container=document.getElementById('ganttView');const g=grouped();
+  if(!g.size){container.innerHTML='<div class="empty-state"><p>No engagements match filters.</p></div>';return}
+  const aE=[];g.forEach(es=>es.forEach(e=>aE.push(e)));
+  const aS=aE.map(e=>pd(e.startDate)),aEn=aE.map(e=>ed(e));
+  let tS=new Date(Math.min(...aS)),tE=new Date(Math.max(...aEn));
+  tS.setDate(tS.getDate()-tS.getDay()-7);tE.setDate(tE.getDate()+21);
+  const tw=wb(tS,tE),today=new Date(),weeks=[];
+  for(let i=0;i<tw;i++){const d=new Date(tS);d.setDate(d.getDate()+i*7);weeks.push(d)}
+  const months=[],quarters=[];let cM=-1,cQ=-1;
+  weeks.forEach(w=>{const km=w.getFullYear()*12+w.getMonth();if(km!==cM){months.push({m:w.getMonth(),y:w.getFullYear(),s:1});cM=km}else months[months.length-1].s++;
+  const kq=w.getFullYear()*4+Math.floor(w.getMonth()/3);if(kq!==cQ){quarters.push({q:Math.floor(w.getMonth()/3)+1,y:w.getFullYear(),s:1});cQ=kq}else quarters[quarters.length-1].s++});
+  const mF=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const mS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let h='<div class="gantt-scroll"><table class="gantt-table"><tr class="gantt-month-header"><th class="client-col">Client / Engagement</th>';
+  (currentPeriod==='quarterly'?quarters:months).forEach(p=>{h+=`<th colspan="${p.s}">${currentPeriod==='quarterly'?'Q'+p.q+' '+p.y:mF[p.m]+' '+p.y}</th>`});
+  h+='</tr><tr><th class="client-col"></th>';
+  weeks.forEach((w,i)=>{const ms=i===0||w.getMonth()!==weeks[i-1]?.getMonth();h+=`<th class="week-col ${ms?'month-start':''}" title="${mS[w.getMonth()]} ${w.getDate()}">${mS[w.getMonth()].charAt(0)}${w.getDate()}</th>`});
+  h+='</tr>';
+  g.forEach((engs,cn)=>{
+    h+=`<tr class="gantt-row group-row"><td class="client-cell">${cn}</td>`;
+    weeks.forEach((w,wi)=>{h+=`<td class="week-cell ${wi===0||w.getMonth()!==weeks[wi-1]?.getMonth()?'month-start':''}"></td>`});h+='</tr>';
+    engs.forEach(eng=>{
+      const s=pd(eng.startDate),e=ed(eng),sw=Math.max(0,wb(tS,s)),ew=Math.min(tw,wb(tS,e)),bw=Math.max(0,ew-sw);
+      const _cn=esc(cn),_el=esc(eng.label),st=autoStatus(eng),cc=st==='Completed'||st==='Launched'?' completed':'';
+      h+=`<tr class="gantt-row eng-row"><td class="client-cell" onclick="showPanel('${_cn}','${_el}')"><span class="eng-type-dot ${tc(eng.launchType)}"></span>${eng.label}</td>`;
+      weeks.forEach((w,wi)=>{const ms=wi===0||w.getMonth()!==weeks[wi-1]?.getMonth();
+        h+=`<td class="week-cell ${ms?'month-start':''}" style="position:relative;">`;
+        if(isLicense(eng)){
+          // Milestone: diamond on the week containing the start date
+          const we=new Date(w);we.setDate(we.getDate()+7);
+          if(s>=w&&s<we) h+=`<div class="gantt-milestone${cc}" onclick="event.stopPropagation();showPanel('${_cn}','${_el}')" style="left:${((s-w)/(7*864e5))*100}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);left:${((s-w)/(7*864e5))*100}%"></div>`;
+        } else {
+          if(wi===sw&&bw>0) h+=`<div class="gantt-bar poc${cc}" style="left:0;width:calc(${bw*100}% + ${Math.max(0,bw-1)}px);" onclick="event.stopPropagation();showPanel('${_cn}','${_el}')"><span class="gantt-bar-label">${eng.label}</span></div>`;
+        }
+        const we2=new Date(w);we2.setDate(we2.getDate()+7);
+        if(today>=w&&today<we2) h+=`<div class="today-marker" style="left:${((today-w)/(7*864e5))*100}%;"></div>`;
+        h+='</td>';});
+      h+='</tr>';
+      mn(eng).forEach(mkt=>{
+        h+=`<tr class="gantt-row sub-row" onmouseenter="showMTT(event,'${_cn}','${_el}','${esc(mkt)}')" onmousemove="posTT(event)" onmouseleave="hideMTT()"><td class="client-cell">${mkt}</td>`;
+        weeks.forEach((w,wi)=>{const ms=wi===0||w.getMonth()!==weeks[wi-1]?.getMonth();
+          h+=`<td class="week-cell ${ms?'month-start':''}" style="position:relative;">`;
+          if(isLicense(eng)){const we=new Date(w);we.setDate(we.getDate()+7);if(s>=w&&s<we) h+=`<div class="gantt-milestone-sub" style="left:${((s-w)/(7*864e5))*100}%"></div>`}
+          else{if(wi===sw&&bw>0) h+=`<div class="gantt-bar poc${cc}" style="left:0;width:calc(${bw*100}% + ${Math.max(0,bw-1)}px);opacity:.25;"></div>`}
+          h+='</td>';});h+='</tr>'})})});
+  h+='</table></div>';container.innerHTML=h}
+
+// CARDS
+function renderCards(){const container=document.getElementById('cardView');const g=grouped();
+  if(!g.size){container.innerHTML='<div class="empty-state"><p>No engagements match filters.</p></div>';return}
+  let h='<div class="card-grid">';
+  g.forEach((engs,cn)=>{h+=`<div class="client-card"><div class="card-client-name">${cn}</div>`;
+    engs.forEach(eng=>{const end=ed(eng),st=autoStatus(eng),prog=progress(eng),_cn=esc(cn),_el=esc(eng.label);
+      const timeline=isLicense(eng)?`<div class="ec-detail"><span class="detail-label">Launch</span><span>${fd(pd(eng.startDate))}</span></div>`:`<div class="ec-detail"><span class="detail-label">Timeline</span><span>${fd(pd(eng.startDate))} → ${fd(end)}</span></div><div class="ec-detail"><span class="detail-label">Duration</span><span>${eng.durationWeeks} weeks</span></div>`;
+      h+=`<div class="engagement-card" onclick="showPanel('${_cn}','${_el}')">
+        <div class="ec-header"><span class="ec-label">${eng.label}</span><div style="display:flex;gap:4px;"><span class="badge ${tc(eng.launchType)}" style="font-size:.62rem;">${eng.launchType}</span><span class="badge ${sc(st)}" style="font-size:.62rem;">${st}</span></div></div>
+        ${timeline}
+        ${eng.contact?`<div class="ec-detail"><span class="detail-label">Contact</span><span>${eng.contact}</span></div>`:''}
+        <div class="ec-detail" style="align-items:flex-start;"><span class="detail-label">Markets</span><div class="market-tags">${mn(eng).map(m=>`<span class="market-tag">${m}</span>`).join('')}</div></div>
+        ${eng.notes?`<div class="ec-notes">${eng.notes}</div>`:''}
+        ${!isLicense(eng)?`<div class="card-progress-bar"><div class="fill poc" style="width:${prog}%"></div></div>`:''}
+      </div>`});h+='</div>'});
+  h+='</div>';container.innerHTML=h}
+
+// MANAGE: MARKET BUILDER
+let fMkts=[];
+function renderMB(){const c=document.getElementById('marketBuilder');c.innerHTML='';
+  fMkts.forEach((m,mi)=>{const d=document.createElement('div');d.className='market-entry';
+    d.innerHTML=`<div class="market-entry-header"><input type="text" value="${m.name}" placeholder="Market (e.g. UK)" onchange="fMkts[${mi}].name=this.value"><button class="rm-btn" onclick="rmM(${mi})">&times;</button></div>
+    <div class="brand-input-row"><input type="text" id="bi_${mi}" placeholder="Brand name" onkeydown="if(event.key==='Enter'){event.preventDefault();addB(${mi})}"><button class="ab-btn" onclick="addB(${mi})">+ Brand</button></div>
+    <div class="brand-tags-row">${m.brands.map((b,bi)=>`<span class="btag-rm">${b}<span class="rx" onclick="rmB(${mi},${bi})">&times;</span></span>`).join('')}</div>`;c.appendChild(d)})}
+function addME(n,b){fMkts.push({name:n||'',brands:b||[]});renderMB();setTimeout(()=>{const i=document.querySelectorAll('.market-entry-header input');if(i.length)i[i.length-1].focus()},50)}
+function rmM(i){fMkts.splice(i,1);renderMB()}
+function addB(mi){const inp=document.getElementById('bi_'+mi);const v=inp.value.trim();if(!v)return;fMkts[mi].brands.push(v);inp.value='';renderMB();setTimeout(()=>{const el=document.getElementById('bi_'+mi);if(el)el.focus()},50)}
+function rmB(mi,bi){fMkts[mi].brands.splice(bi,1);renderMB()}
+function updateDL(){document.getElementById('clientNames').innerHTML=CLIENT_DATA.map(c=>`<option value="${c.name}">`).join('')}
+
+function clearForm(){['fClient','fLabel','fContact','fNotes'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('fType').value='Full License';document.getElementById('fStart').value='';document.getElementById('fDuration').value='';
+  document.getElementById('editCI').value='-1';document.getElementById('editEI').value='-1';
+  document.getElementById('formTitle').textContent='Add Engagement';document.getElementById('formSub').textContent='Add a new launch or POC. Status is calculated automatically.';
+  fMkts=[];renderMB()}
+async function saveEng(){
+  const cn=document.getElementById('fClient').value.trim(),type=document.getElementById('fType').value,label=document.getElementById('fLabel').value.trim(),contact=document.getElementById('fContact').value.trim();
+  const start=document.getElementById('fStart').value,dur=parseInt(document.getElementById('fDuration').value)||0,notes=document.getElementById('fNotes').value.trim();
+  const eci=parseInt(document.getElementById('editCI').value),eei=parseInt(document.getElementById('editEI').value);
+  if(!cn||!label||!start){showToast('Please fill in client, label, and start date.');return}
+  if(type==='POC'&&!dur){showToast('POCs need a duration in weeks.');return}
+  const mkts=fMkts.filter(m=>m.name.trim()).map(m=>({name:m.name.trim(),brands:[...m.brands]}));
+  if(!mkts.length){showToast('Add at least one market.');return}
+  const obj={label,launchType:type,markets:mkts,startDate:start,durationWeeks:dur,notes,contact};
+  if(eci>=0&&eei>=0){let cl=CLIENT_DATA[eci];if(cl.name!==cn){cl.engagements.splice(eei,1);if(!cl.engagements.length)CLIENT_DATA.splice(eci,1);
+    let t=CLIENT_DATA.find(c=>c.name===cn);if(!t){t={name:cn,engagements:[]};CLIENT_DATA.push(t)}t.engagements.push(obj)}else cl.engagements[eei]=obj;showToast('Updated.')}
+  else{let cl=CLIENT_DATA.find(c=>c.name===cn);if(!cl){cl={name:cn,engagements:[]};CLIENT_DATA.push(cl)}cl.engagements.push(obj);showToast('Added.')}
+  await saveData();clearForm();render()}
+function editE(ci,ei){const c=CLIENT_DATA[ci];if(!c)return;const e=c.engagements[ei];if(!e)return;
+  document.getElementById('fClient').value=c.name;document.getElementById('fType').value=e.launchType;document.getElementById('fLabel').value=e.label;
+  document.getElementById('fContact').value=e.contact;document.getElementById('fStart').value=e.startDate;document.getElementById('fDuration').value=e.durationWeeks;
+  document.getElementById('fNotes').value=e.notes||'';document.getElementById('editCI').value=ci;document.getElementById('editEI').value=ei;
+  document.getElementById('formTitle').textContent='Edit: '+c.name+' — '+e.label;
+  fMkts=e.markets.map(m=>typeof m==='string'?{name:m,brands:[]}:{name:m.name,brands:[...(m.brands||[])]});
+  renderMB();document.getElementById('formSection').scrollIntoView({behavior:'smooth',block:'start'})}
+async function dupE(ci,ei){const c=CLIENT_DATA[ci];if(!c)return;const e=c.engagements[ei];const cp=JSON.parse(JSON.stringify(e));cp.label+=' (copy)';c.engagements.push(cp);await saveData();render();showToast('Duplicated.')}
+async function delE(ci,ei){const c=CLIENT_DATA[ci];if(!c)return;if(!confirm('Remove "'+c.engagements[ei].label+'" from '+c.name+'?'))return;c.engagements.splice(ei,1);if(!c.engagements.length)CLIENT_DATA.splice(ci,1);await saveData();clearForm();render();showToast('Removed.')}
+function cancelEdit(){clearForm()}
+
+function renderET(){const c=document.getElementById('engTableC');const a=allE();
+  if(!a.length){c.innerHTML='<div class="empty-state"><p>No engagements.</p></div>';return}
+  let h='<table class="eng-table"><thead><tr><th>Client</th><th>Engagement</th><th>Type</th><th>Markets</th><th>Date</th><th>Wks</th><th>Status</th><th></th></tr></thead><tbody>';
+  let prev='';
+  a.forEach(e=>{const st=autoStatus(e),show=e.cn!==prev;prev=e.cn;
+    h+=`<tr><td style="font-weight:${show?'700':'400'};color:${show?'var(--blue-900)':'var(--gray-400)'}">${show?e.cn:''}</td>
+    <td style="font-weight:600;">${e.label}</td>
+    <td><span class="badge ${tc(e.launchType)}" style="font-size:.62rem;">${e.launchType}</span></td>
+    <td><div class="market-tags">${mn(e).map(m=>`<span class="market-tag">${m}</span>`).join('')}</div></td>
+    <td style="white-space:nowrap;">${fd(pd(e.startDate))}</td>
+    <td>${e.durationWeeks||'—'}</td>
+    <td><span class="badge ${sc(st)}" style="font-size:.62rem;">${st}</span></td>
+    <td><div class="actions-cell"><button class="btn-sm edit" onclick="editE(${e.ci},${e.ei})">Edit</button><button class="btn-sm dup" onclick="dupE(${e.ci},${e.ei})">Dup</button><button class="btn-sm del" onclick="delE(${e.ci},${e.ei})">Del</button></div></td></tr>`});
+  h+='</tbody></table>';c.innerHTML=h}
+
+// TOGGLES
+document.getElementById('viewToggle').addEventListener('click',e=>{const btn=e.target.closest('button');if(!btn)return;
+  document.querySelectorAll('#viewToggle button').forEach(b=>b.classList.remove('active'));btn.classList.add('active');currentView=btn.dataset.view;
+  const isM=currentView==='manage';document.getElementById('overviewSection').style.display=isM?'none':'';
+  document.getElementById('manageView').className=isM?'manage-view active':'manage-view';
+  document.getElementById('periodToggle').style.display=currentView==='gantt'?'':'none';
+  if(!isM){document.getElementById('ganttView').style.display=currentView==='gantt'?'':'none';document.getElementById('cardView').style.display=currentView==='cards'?'':'none';document.getElementById('ganttLegend').style.display=currentView==='gantt'?'':'none'}render()});
+document.getElementById('periodToggle').addEventListener('click',e=>{const btn=e.target.closest('button');if(!btn)return;
+  document.querySelectorAll('#periodToggle button').forEach(b=>b.classList.remove('active'));btn.classList.add('active');currentPeriod=btn.dataset.period;render()});
+
+function render(){renderSum();renderGantt();renderCards();renderET();updateDL();renderMB()}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closePanel()});
+// Init
+loadData();
+if(!fMkts.length)addME();
+</script>
+</body>
+</html>.eng-type-dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:middle;position:relative;top:-1px}
+.eng-type-dot.license{background:var(--blue-500)}.eng-type-dot.poc{background:var(--poc-500)}
+.gantt-row.sub-row td.client-cell{font-weight:400;font-size:.74rem;color:var(--gray-500);padding-left:48px}
+.gantt-row.sub-row td.client-cell::before{content:'';position:absolute;left:36px;top:50%;width:8px;height:1px;background:var(--gray-300)}
+.gantt-row.sub-row td{height:28px}
+/* POC bar */
+.gantt-bar{position:absolute;top:5px;bottom:5px;border-radius:5px;z-index:1;cursor:pointer;transition:filter .15s,transform .1s}
+.gantt-bar:hover{filter:brightness(1.08);transform:scaleY(1.15)}
+.gantt-bar.poc{background:linear-gradient(135deg,var(--poc-500),var(--poc-400));box-shadow:0 2px 6px rgba(245,158,11,.25)}
+.gantt-bar.completed{opacity:.4}
+.gantt-bar-label{position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:.64rem;font-weight:600;color:var(--white);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:calc(100% - 16px);pointer-events:none}
+/* License milestone diamond */
+.gantt-milestone{position:absolute;top:50%;left:50%;width:14px;height:14px;transform:translate(-50%,-50%) rotate(45deg);background:var(--blue-500);border-radius:2px;z-index:2;cursor:pointer;transition:transform .15s,filter .15s;box-shadow:0 2px 6px rgba(37,99,235,.3)}
+.gantt-milestone:hover{transform:translate(-50%,-50%) rotate(45deg) scale(1.3);filter:brightness(1.1)}
+.gantt-milestone.completed{opacity:.4}
+.gantt-milestone-label{position:absolute;top:50%;left:calc(50% + 12px);transform:translateY(-50%);font-size:.6rem;font-weight:600;color:var(--blue-600);white-space:nowrap;pointer-events:none;z-index:3}
+/* Sub-row milestone */
+.gantt-milestone-sub{position:absolute;top:50%;left:50%;width:8px;height:8px;transform:translate(-50%,-50%) rotate(45deg);background:var(--blue-400);border-radius:1px;z-index:2;opacity:.45}
+.today-marker{position:absolute;top:0;bottom:0;width:2px;background:#ef4444;z-index:5;pointer-events:none}
+.today-marker::before{content:'Today';position:absolute;top:-20px;left:50%;transform:translateX(-50%);font-size:.58rem;font-weight:700;color:#ef4444;background:var(--white);padding:1px 5px;border-radius:3px;white-space:nowrap;border:1px solid rgba(239,68,68,.2)}
+/* Tooltip */
+.market-tooltip{position:fixed;z-index:200;pointer-events:none;background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:14px 18px;box-shadow:var(--shadow-lg);max-width:300px;animation:ttIn .12s ease}
+@keyframes ttIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.market-tooltip .tt-header{font-size:.72rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:4px}
+.market-tooltip .tt-market{font-size:.95rem;font-weight:700;color:var(--blue-900);margin-bottom:8px}
+.market-tooltip .tt-label{font-size:.7rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.03em;font-weight:500;margin-bottom:4px}
+.market-tooltip .tt-brands{display:flex;flex-wrap:wrap;gap:5px}
+.market-tooltip .tt-brand-tag{background:var(--blue-50);color:var(--blue-600);padding:3px 9px;border-radius:4px;font-size:.74rem;font-weight:500}
+.market-tooltip .tt-none{font-size:.78rem;color:var(--gray-400);font-style:italic}
+/* Cards */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
+.client-card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);padding:20px;transition:box-shadow .2s,border-color .2s;cursor:pointer}
+.client-card:hover{box-shadow:var(--shadow-md);border-color:var(--gray-300)}
+.client-card .card-client-name{font-size:1.1rem;font-weight:700;color:var(--blue-900);margin-bottom:12px}
+.engagement-card{padding:12px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius-sm);margin-bottom:8px}
+.engagement-card:last-child{margin-bottom:0}
+.engagement-card .ec-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.engagement-card .ec-label{font-size:.9rem;font-weight:600;color:var(--gray-800)}
+.ec-detail{display:flex;gap:6px;font-size:.8rem;color:var(--gray-600);margin-bottom:5px;align-items:baseline}
+.ec-detail .detail-label{font-weight:500;color:var(--gray-400);min-width:72px;flex-shrink:0;font-size:.7rem;text-transform:uppercase;letter-spacing:.03em}
+.ec-notes{font-size:.76rem;color:var(--gray-500);font-style:italic;margin-top:6px;padding-top:6px;border-top:1px solid var(--gray-200)}
+.badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.badge.license{background:var(--blue-100);color:var(--blue-600)}.badge.poc{background:var(--poc-100);color:#92400e}
+.badge.status-upcoming{background:var(--gray-100);color:var(--gray-600)}.badge.status-inprogress{background:var(--blue-100);color:var(--blue-600)}.badge.status-completed{background:var(--green-100);color:#065f46}
+.market-tags{display:flex;flex-wrap:wrap;gap:4px}
+.market-tag{background:var(--gray-100);color:var(--gray-600);padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:500}
+.brand-tag{background:var(--blue-50);color:var(--blue-600);padding:2px 8px;border-radius:4px;font-size:.68rem;font-weight:500}
+.card-progress-bar{margin-top:8px;height:4px;background:var(--gray-200);border-radius:10px;overflow:hidden}
+.card-progress-bar .fill{height:100%;border-radius:10px;transition:width .4s ease}
+.card-progress-bar .fill.license{background:var(--blue-400)}.card-progress-bar .fill.poc{background:var(--poc-400)}
+/* Detail panel */
+.tooltip-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:100;background:rgba(0,0,0,.15);backdrop-filter:blur(2px)}
+.tooltip-overlay.visible{display:block}
+.detail-panel{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--white);border-radius:var(--radius-lg);box-shadow:var(--shadow-xl);padding:28px 32px;z-index:101;max-width:520px;width:92%;animation:panelIn .2s ease;max-height:90vh;overflow-y:auto}
+@keyframes panelIn{from{opacity:0;transform:translate(-50%,-50%) scale(.96)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+.detail-panel .panel-close{position:absolute;top:14px;right:16px;font-size:1.2rem;color:var(--gray-400);cursor:pointer;width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:50%;transition:all .15s}
+.detail-panel .panel-close:hover{background:var(--gray-100);color:var(--gray-600)}
+.detail-panel h3{font-size:1.15rem;font-weight:700;color:var(--blue-900);margin-bottom:14px}
+.panel-row{display:flex;gap:8px;margin-bottom:9px;font-size:.85rem;align-items:baseline}
+.panel-label{font-weight:500;color:var(--gray-400);min-width:88px;font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;flex-shrink:0}
+.panel-value{color:var(--gray-700)}
+.panel-notes{margin-top:12px;padding:12px 14px;background:var(--gray-50);border-radius:var(--radius-sm);font-size:.82rem;color:var(--gray-600);line-height:1.5;border-left:3px solid var(--blue-200)}
+.panel-market-section{margin-top:14px;padding-top:12px;border-top:1px solid var(--gray-100)}
+.pms-title{font-size:.72rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:8px}
+.panel-market-item{margin-bottom:8px}.pmi-name{font-size:.84rem;font-weight:600;color:var(--gray-700);margin-bottom:3px}
+.pmi-brands{display:flex;flex-wrap:wrap;gap:4px}
+.legend{display:flex;gap:20px;align-items:center;padding:8px 0;margin-bottom:6px}
+.legend-item{display:flex;align-items:center;gap:6px;font-size:.76rem;color:var(--gray-500)}
+.legend-dot{width:12px;height:12px;border-radius:3px}.legend-dot.license{background:var(--blue-500)}.legend-dot.poc{background:var(--poc-500)}
+.legend-dot.today{background:#ef4444;width:2px;height:14px;border-radius:1px}
+.legend-diamond{width:10px;height:10px;background:var(--blue-500);transform:rotate(45deg);border-radius:2px}
+.empty-state{text-align:center;padding:60px 20px;color:var(--gray-400)}
+/* MANAGE */
+.manage-view{display:none}.manage-view.active{display:block}
+.manage-section{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-lg);padding:28px 32px;margin-bottom:20px}
+.manage-section h2{font-size:1.1rem;font-weight:700;color:var(--blue-900);margin-bottom:4px}
+.manage-section .section-sub{font-size:.82rem;color:var(--gray-500);margin-bottom:20px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:640px){.form-grid{grid-template-columns:1fr}}
+.form-field{display:flex;flex-direction:column;gap:4px}.form-field.full-width{grid-column:1/-1}
+.form-field label{font-size:.75rem;font-weight:600;color:var(--gray-600);text-transform:uppercase;letter-spacing:.03em}
+.form-field input,.form-field select,.form-field textarea{padding:9px 12px;border:1px solid var(--gray-300);border-radius:var(--radius-sm);font-size:.88rem;color:var(--gray-700);background:var(--white);transition:border-color .15s}
+.form-field input:focus,.form-field select:focus,.form-field textarea:focus{outline:none;border-color:var(--blue-400);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+.form-field textarea{resize:vertical;min-height:56px}
+.form-field .help-text{font-size:.72rem;color:var(--gray-400)}
+.market-builder{display:flex;flex-direction:column;gap:10px}
+.market-entry{background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius-sm);padding:12px 14px}
+.market-entry-header{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.market-entry-header input{flex:1}
+.market-entry-header .rm-btn{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--gray-400);font-size:1.1rem;transition:all .15s}
+.market-entry-header .rm-btn:hover{background:var(--red-100);color:var(--red-500)}
+.brand-input-row{display:flex;gap:6px;align-items:center}
+.brand-input-row input{flex:1;font-size:.82rem;padding:6px 10px}
+.brand-input-row .ab-btn{padding:6px 12px;font-size:.75rem;font-weight:600;color:var(--blue-500);border:1px solid var(--blue-200);border-radius:var(--radius-sm);transition:all .15s;white-space:nowrap}
+.brand-input-row .ab-btn:hover{background:var(--blue-50)}
+.brand-tags-row{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.btag-rm{display:inline-flex;align-items:center;gap:4px;background:var(--blue-50);color:var(--blue-600);padding:3px 8px 3px 10px;border-radius:4px;font-size:.72rem;font-weight:500}
+.btag-rm .rx{cursor:pointer;font-size:.85rem;color:var(--blue-300);transition:color .15s;line-height:1}.btag-rm .rx:hover{color:var(--red-500)}
+.add-market-btn{padding:8px 16px;font-size:.82rem;font-weight:600;color:var(--blue-500);border:1px dashed var(--blue-300);border-radius:var(--radius-sm);transition:all .15s;text-align:center}
+.add-market-btn:hover{background:var(--blue-50);border-color:var(--blue-400)}
+.form-actions{display:flex;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid var(--gray-100)}
+.btn-primary{padding:10px 24px;font-size:.88rem;font-weight:600;background:var(--blue-500);color:var(--white);border-radius:var(--radius-sm);transition:all .15s;border:none}.btn-primary:hover{background:var(--blue-600)}
+.btn-secondary{padding:10px 24px;font-size:.88rem;font-weight:500;background:var(--white);color:var(--gray-600);border-radius:var(--radius-sm);transition:all .15s;border:1px solid var(--gray-300)}.btn-secondary:hover{background:var(--gray-50);border-color:var(--gray-400)}
+.data-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:20px;padding:14px 18px;background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md)}
+.dt-label{font-size:.78rem;font-weight:600;color:var(--gray-500);margin-right:4px}
+.dt-sep{width:1px;height:24px;background:var(--gray-200);margin:0 4px}
+.btn-tool{padding:7px 14px;font-size:.78rem;font-weight:600;border-radius:var(--radius-sm);transition:all .15s;display:inline-flex;align-items:center;gap:5px}
+.btn-tool svg{width:14px;height:14px}
+.btn-tool.blue{color:var(--blue-500);border:1px solid var(--blue-200)}.btn-tool.blue:hover{background:var(--blue-50)}
+.btn-tool.red{color:var(--red-500);border:1px solid var(--red-100)}.btn-tool.red:hover{background:var(--red-100)}
+.save-ind{font-size:.72rem;color:var(--green-600);font-weight:500;margin-left:auto;display:flex;align-items:center;gap:4px}
+.save-ind .dot{width:6px;height:6px;border-radius:50%;background:var(--green-500)}
+.eng-table{width:100%;border-collapse:collapse;margin-top:16px}
+.eng-table th{text-align:left;padding:8px 12px;font-size:.72rem;font-weight:600;color:var(--gray-400);text-transform:uppercase;letter-spacing:.04em;border-bottom:2px solid var(--gray-200)}
+.eng-table td{padding:10px 12px;font-size:.82rem;color:var(--gray-700);border-bottom:1px solid var(--gray-100);vertical-align:top}
+.eng-table tr:hover td{background:var(--blue-50)}
+.actions-cell{display:flex;gap:5px;flex-wrap:wrap}
+.btn-sm{padding:4px 10px;font-size:.7rem;font-weight:600;border-radius:4px;transition:all .15s}
+.btn-sm.edit{color:var(--blue-500);border:1px solid var(--blue-200)}.btn-sm.edit:hover{background:var(--blue-50)}
+.btn-sm.dup{color:var(--green-600);border:1px solid var(--green-100)}.btn-sm.dup:hover{background:var(--green-100)}
+.btn-sm.del{color:var(--red-500);border:1px solid var(--red-100)}.btn-sm.del:hover{background:var(--red-100)}
+.toast{position:fixed;bottom:24px;right:24px;z-index:300;background:var(--blue-900);color:var(--white);padding:12px 20px;border-radius:var(--radius-md);font-size:.85rem;font-weight:500;box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:opacity .3s}.toast.visible{opacity:1;pointer-events:auto}
+#importInput{display:none}
+.sync-bar{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-md);margin-bottom:16px;font-size:.8rem;flex-wrap:wrap}
+.sync-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;transition:background .3s}
+.sync-dot.ok{background:var(--green-500)}.sync-dot.saving{background:var(--poc-500);animation:pulse 1s infinite}
+.sync-dot.error{background:var(--red-500)}.sync-dot.loading{background:var(--blue-400);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.sync-text{color:var(--gray-500);font-size:.78rem}
+.sync-bar .btn-refresh{padding:5px 12px;font-size:.75rem;font-weight:600;color:var(--blue-500);border:1px solid var(--blue-200);border-radius:var(--radius-sm);transition:all .15s;margin-left:auto;display:inline-flex;align-items:center;gap:4px}
+.sync-bar .btn-refresh:hover{background:var(--blue-50)}
+.sync-bar .btn-refresh svg{width:12px;height:12px}
+@media(max-width:768px){.header{flex-direction:column;align-items:flex-start}.summary-strip{grid-template-columns:repeat(2,1fr)}.card-grid{grid-template-columns:1fr}.filter-bar{flex-direction:column;align-items:stretch}.manage-section{padding:20px 18px}.data-toolbar{flex-direction:column;align-items:flex-start}.save-ind{margin-left:0}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <div class="header-left"><h1>Client Onboarding</h1><p>Launch pipeline &amp; timeline overview</p></div>
+    <div class="header-right">
+      <div class="toggle-group" id="viewToggle">
+        <button class="active" data-view="gantt">Timeline</button>
+        <button data-view="cards">Cards</button>
+        <button data-view="manage">Manage</button>
+      </div>
+      <div class="toggle-group" id="periodToggle">
+        <button class="active" data-period="monthly">Monthly</button>
+        <button data-period="quarterly">Quarterly</button>
+      </div>
+    </div>
+  </div>
+  <div class="sync-bar" id="syncBar">
+    <span class="sync-dot loading" id="syncDot"></span>
+    <span class="sync-text" id="syncText">Loading…</span>
+    <button class="btn-refresh" onclick="refreshData()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>Refresh</button>
+  </div>
+  <div id="overviewSection">
+    <div class="summary-strip" id="summaryStrip"></div>
+    <div class="filter-bar">
+      <div class="filter-group"><label>Type</label><select id="filterType"><option value="">All</option><option value="Full License">License Launch</option><option value="POC">POC</option></select></div>
+      <div class="filter-group"><label>Status</label><select id="filterStatus"><option value="">All</option><option value="Upcoming">Upcoming</option><option value="In Progress">In Progress</option><option value="Completed">Completed</option></select></div>
+      <div class="filter-group"><label>Search</label><input type="text" id="filterMarket" placeholder="Market, brand, client…"></div>
+      <button class="reset-btn" onclick="resetFilters()">Reset</button>
+    </div>
+    <div class="legend" id="ganttLegend">
+      <div class="legend-item"><div class="legend-diamond"></div> License Launch</div>
+      <div class="legend-item"><div class="legend-dot poc"></div> POC (duration)</div>
+      <div class="legend-item"><div class="legend-dot today"></div> Today</div>
+    </div>
+    <div id="ganttView" class="gantt-container"></div>
+    <div id="cardView" style="display:none;"></div>
+  </div>
+  <div id="manageView" class="manage-view">
+    <div class="data-toolbar">
+      <span class="dt-label">Data</span>
+      <button class="btn-tool blue" onclick="exportJSON()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export</button>
+      <button class="btn-tool blue" onclick="document.getElementById('importInput').click()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Import</button>
+      <input type="file" id="importInput" accept=".json" onchange="importJSON(event)">
+    </div>
+    <div class="manage-section" id="formSection">
+      <h2 id="formTitle">Add Engagement</h2>
+      <p class="section-sub" id="formSub">Add a new launch or POC. Status is calculated automatically from dates.</p>
+      <input type="hidden" id="editCI" value="-1"><input type="hidden" id="editEI" value="-1">
+      <div class="form-grid">
+        <div class="form-field"><label>Client *</label><input list="clientNames" id="fClient" placeholder="Type or select" autocomplete="off"><datalist id="clientNames"></datalist></div>
+        <div class="form-field"><label>Type *</label><select id="fType"><option value="Full License">License Launch</option><option value="POC">POC</option></select></div>
+        <div class="form-field"><label>Label *</label><input type="text" id="fLabel" placeholder="e.g. EU Rollout, HQ Pilot"><p class="help-text">Short name for this engagement.</p></div>
+        <div class="form-field"><label>Contact *</label><input type="text" id="fContact" placeholder="e.g. Maria Jensen"></div>
+        <div class="form-field"><label>Start Date *</label><input type="date" id="fStart"></div>
+        <div class="form-field"><label id="fDurLabel">Duration (weeks) *</label><input type="number" id="fDuration" min="0" max="104" placeholder="e.g. 12"><p class="help-text" id="fDurHelp">POC duration. For license launches enter 0 (shown as milestone).</p></div>
+        <div class="form-field full-width"><label>Notes</label><textarea id="fNotes" placeholder="Optional context…"></textarea></div>
+        <div class="form-field full-width"><label>Markets &amp; Brands</label><p class="help-text">Add each market, then the brands activated in it.</p><div class="market-builder" id="marketBuilder"></div><button class="add-market-btn" onclick="addME()" style="margin-top:8px;">+ Add Market</button></div>
+      </div>
+      <div class="form-actions"><button class="btn-primary" onclick="saveEng()">Save</button><button class="btn-secondary" onclick="cancelEdit()">Cancel</button></div>
+    </div>
+    <div class="manage-section"><h2>All Engagements</h2><p class="section-sub">Status updates automatically. Licenses show as milestone markers on the timeline.</p><div id="engTableC"></div></div>
+  </div>
+  <div class="tooltip-overlay" id="tooltipOverlay" onclick="closePanel()"></div>
+  <div class="detail-panel" id="detailPanel" style="display:none;"></div>
+  <div class="market-tooltip" id="marketTooltip" style="display:none;"></div>
+  <div class="toast" id="toast"></div>
+</div>
+<script>
+// ═══════════════════════════════════════════════════════════════════════
+// DATA MODEL
+// ═══════════════════════════════════════════════════════════════════════
+//
+// CLIENT → ENGAGEMENTS → MARKETS → BRANDS
+//
+// launchType: "Full License" or "POC"
+//   License = milestone marker on timeline (single date, durationWeeks=0)
+//   POC     = duration bar on timeline (startDate + durationWeeks)
+//
+// Status is automatic:
+//   POC:     Upcoming / In Progress / Completed (from dates)
+//   License: Upcoming / Launched (from startDate vs today)
+//
+// Data sourced from HubSpot CRM (Feb 2026).
+// ═══════════════════════════════════════════════════════════════════════
+
+const STORAGE_KEY='copli_onboarding_v2';
+const API_URL='/api/data';
+let CLIENT_DATA=[];
+let isOnline=true;
+
+function setSyncState(state,text){
+  const d=document.getElementById('syncDot'),t=document.getElementById('syncText');
+  d.className='sync-dot '+state;t.textContent=text;
+}
+
+async function loadData(){
+  setSyncState('loading','Loading…');
+  try{
     const res=await fetch(API_URL);
     if(!res.ok)throw new Error(res.status);
     const json=await res.json();isOnline=true;
