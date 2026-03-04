@@ -41,7 +41,7 @@ export default async function handler(req, res) {
       }
 
       await put(BLOB_NAME, JSON.stringify(data), {
-        access: 'private',
+        access: 'public',
         addRandomSuffix: false,
         allowOverwrite: true,
         contentType: 'application/json'
@@ -52,7 +52,7 @@ export default async function handler(req, res) {
         updatedAt: now,
         updatedBy: updatedBy || 'Unknown'
       }), {
-        access: 'private',
+        access: 'public',
         addRandomSuffix: false,
         allowOverwrite: true,
         contentType: 'application/json'
