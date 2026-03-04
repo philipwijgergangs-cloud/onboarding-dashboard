@@ -42,6 +42,7 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
@@ -74,6 +75,21 @@ module.exports = async function handler(req, res) {
 
       const putResult = await blobPut(BLOB_NAME, JSON.stringify(data));
 
+      const now = new Date().toISOString();
+      await blobPut(META_NAME, JSON.stringify({
+        updatedAt: now,
+        updatedBy: updatedBy || 'Unknown'
+      }));
+
+      return res.status(200).json({ success: true, updatedAt: now, debug: putResult });
+    }
+
+    return res.status(405).json({ error: 'Method not allowed' });
+  } catch (err) {
+    console.error('API error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+};
       const now = new Date().toISOString();
       await blobPut(META_NAME, JSON.stringify({
         updatedAt: now,
